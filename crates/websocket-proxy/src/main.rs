@@ -6,6 +6,8 @@ mod registry;
 mod server;
 mod subscriber;
 
+use flashblocks_compression as compression;
+
 use axum::extract::ws::Message;
 use axum::http::Uri;
 use clap::Parser;
@@ -16,7 +18,6 @@ use rate_limit::{InMemoryRateLimit, RateLimit, RedisRateLimit};
 use registry::Registry;
 use server::Server;
 use std::collections::HashMap;
-use std::io::Write;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -74,10 +75,10 @@ struct Args {
     #[arg(
         long,
         env,
-        default_value = "false",
-        help = "Enable brotli compression on messages to downstream clients"
+        default_value = "none",
+        help = "Enable compression on messages to downstream clients. Supported values: br (Brotli), zstd (Zstandard), dcz (Zstandard with dictionaries), none (no compression)"
     )]
-    enable_compression: bool,
+    enable_compression: Option<String>,
 
     #[arg(
         long,
@@ -164,6 +165,21 @@ struct Args {
         help = "Timeout in milliseconds to wait for pong response from clients"
     )]
     client_pong_timeout_ms: u64,
+
+    #[arg(
+        long,
+        env = "DICT_ORACLE",
+        help = "Dictionary oracle URL for compression dictionaries"
+    )]
+    dict_oracle: Option<String>,
+
+    #[arg(
+        long,
+        env = "DICT_STORAGE",
+        default_value = "/data/flashblocks-dicts",
+        help = "Directory path for storing compression dictionaries"
+    )]
+    dict_storage: Option<std::path::PathBuf>,
 }
 
 #[tokio::main]
@@ -242,30 +258,44 @@ async fn main() {
     let (send, _rec) = broadcast::channel(args.message_buffer_size);
     let sender = send.clone();
 
-    let listener = move |data: Vec<u8>| {
-        trace!(message = "received data", data = ?data);
-        // Subtract one from receiver count, as we have to keep one receiver open at all times (see _rec)
-        // to avoid the channel being closed. However this is not an active client connection.
-        metrics_clone
-            .active_connections
-            .set((send.receiver_count() - 1) as f64);
+    let compression_alg = match args.enable_compression.as_deref() {
+        Some("br") => compression::CompressionAlg::Br,
+        Some("zstd") => compression::CompressionAlg::Zstd,
+        Some("dcz") => compression::CompressionAlg::Dcz,
+        _ => compression::CompressionAlg::None,
+    };
 
-        let message_data = if args.enable_compression {
-            let data_bytes = data.as_slice();
-            let mut compressed_data_bytes = Vec::new();
-            {
-                let mut compressor =
-                    brotli::CompressorWriter::new(&mut compressed_data_bytes, 4096, 5, 22);
-                compressor.write_all(data_bytes).unwrap();
+    let compressor = Arc::new(
+        compression::StreamEncoder::new()
+            .maybe_dict_oracle(args.dict_oracle.as_deref())
+            .maybe_dict_storage(args.dict_storage.as_deref()),
+    );
+
+    let listener = {
+        let compressor = compressor.clone();
+        move |data: Vec<u8>| {
+            trace!(message = "received data", data = ?data);
+            // Subtract one from receiver count, as we have to keep one receiver open at all times (see _rec)
+            // to avoid the channel being closed. However this is not an active client connection.
+            metrics_clone
+                .active_connections
+                .set((send.receiver_count() - 1) as f64);
+
+            let message_data = match compressor.compress_with(&data, compression_alg) {
+                Ok(compressed) => compressed,
+                Err(e) => {
+                    warn!(
+                        message = "downstream compression failed, falling back to uncompressed",
+                        error = %e
+                    );
+                    data.clone()
+                }
+            };
+
+            match send.send(message_data.into()) {
+                Ok(_) => (),
+                Err(e) => error!(message = "failed to send data", error = e.to_string()),
             }
-            compressed_data_bytes
-        } else {
-            data
-        };
-
-        match send.send(message_data.into()) {
-            Ok(_) => (),
-            Err(e) => error!(message = "failed to send data", error = e.to_string()),
         }
     };
 

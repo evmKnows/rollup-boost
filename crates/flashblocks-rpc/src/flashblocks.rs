@@ -1,12 +1,13 @@
 use crate::{FlashblocksApi, cache::FlashblocksCache};
 use alloy_primitives::{Address, TxHash, U256};
+use flashblocks_compression::StreamDecoder;
 use futures_util::StreamExt;
 use jsonrpsee::core::async_trait;
 use op_alloy_network::Optimism;
 use reth_optimism_chainspec::OpChainSpec;
 use reth_rpc_eth_api::{RpcBlock, RpcReceipt};
 use rollup_boost_types::flashblocks::FlashblocksPayloadV1;
-use std::{io::Read, sync::Arc};
+use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{debug, error, info};
@@ -16,19 +17,31 @@ use url::Url;
 pub struct FlashblocksOverlay {
     url: Url,
     cache: FlashblocksCache,
+    decoder: Arc<StreamDecoder>,
 }
 
 impl FlashblocksOverlay {
-    pub fn new(url: Url, chain_spec: Arc<OpChainSpec>) -> Self {
+    pub fn new(
+        url: Url,
+        chain_spec: Arc<OpChainSpec>,
+        dict_oracle: Option<String>,
+        dict_storage: Option<std::path::PathBuf>,
+    ) -> Self {
+        let decoder = StreamDecoder::new()
+            .maybe_dict_storage(dict_storage.as_deref())
+            .maybe_dict_oracle(dict_oracle.as_deref());
+
         Self {
             url,
             cache: FlashblocksCache::new(chain_spec),
+            decoder: Arc::new(decoder),
         }
     }
 
     pub fn start(&mut self) -> eyre::Result<()> {
         let url = self.url.clone();
         let (sender, mut receiver) = mpsc::channel(100);
+        let decoder = self.decoder.clone();
 
         tokio::spawn(async move {
             let mut backoff = std::time::Duration::from_secs(1);
@@ -44,21 +57,26 @@ impl FlashblocksOverlay {
                             debug!("Received message: {:?}", msg);
 
                             match msg {
-                                Ok(Message::Binary(bytes)) => match try_decode_message(&bytes) {
-                                    Ok(payload) => {
-                                        info!("Received payload: {:?}", payload);
+                                Ok(Message::Binary(bytes)) => {
+                                    match try_decode_message(&bytes, &decoder) {
+                                        Ok(payload) => {
+                                            info!("Received payload: {:?}", payload);
 
-                                        let _ = sender
-                                            .send(InternalMessage::NewPayload(payload))
-                                            .await
-                                            .map_err(|e| {
-                                                error!("failed to send payload to channel: {}", e);
-                                            });
+                                            let _ = sender
+                                                .send(InternalMessage::NewPayload(payload))
+                                                .await
+                                                .map_err(|e| {
+                                                    error!(
+                                                        "failed to send payload to channel: {}",
+                                                        e
+                                                    );
+                                                });
+                                        }
+                                        Err(e) => {
+                                            error!("failed to parse fb message: {}", e);
+                                        }
                                     }
-                                    Err(e) => {
-                                        error!("failed to parse fb message: {}", e);
-                                    }
-                                },
+                                }
                                 Ok(Message::Close(e)) => {
                                     error!("WebSocket connection closed: {:?}", e);
                                     break;
@@ -110,32 +128,9 @@ enum InternalMessage {
     NewPayload(FlashblocksPayloadV1),
 }
 
-fn try_decode_message(bytes: &[u8]) -> eyre::Result<FlashblocksPayloadV1> {
-    let text = try_parse_message(bytes)?;
-
-    let payload: FlashblocksPayloadV1 = match serde_json::from_str(&text) {
-        Ok(m) => m,
-        Err(e) => {
-            return Err(eyre::eyre!("failed to parse message: {}", e));
-        }
-    };
-
-    Ok(payload)
-}
-
-fn try_parse_message(bytes: &[u8]) -> eyre::Result<String> {
-    if let Ok(text) = String::from_utf8(bytes.to_vec())
-        && text.trim_start().starts_with("{")
-    {
-        return Ok(text);
-    }
-
-    let mut decompressor = brotli::Decompressor::new(bytes, 4096);
-    let mut decompressed = Vec::new();
-    decompressor.read_to_end(&mut decompressed)?;
-
-    let text = String::from_utf8(decompressed)?;
-    Ok(text)
+fn try_decode_message(bytes: &[u8], decoder: &StreamDecoder) -> eyre::Result<FlashblocksPayloadV1> {
+    let raw = decoder.try_decode(bytes)?;
+    serde_json::from_slice(&raw).map_err(|e| eyre::eyre!("failed to parse message: {}", e))
 }
 
 #[async_trait]

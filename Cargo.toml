@@ -3,6 +3,7 @@ resolver = "3"
 
 members = [
     "crates/rollup-boost",
+    "crates/flashblocks-compression",
     "crates/websocket-proxy",
     "crates/flashblocks-rpc", 
     "crates/rollup-boost-types",
@@ -10,6 +11,7 @@ members = [
 
 [workspace.dependencies]
 rollup-boost = { path = "crates/rollup-boost" }
+flashblocks-compression = { path = "crates/flashblocks-compression" }
 rollup-boost-types = { path = "crates/rollup-boost-types" }
 
 backoff = "0.4.0"

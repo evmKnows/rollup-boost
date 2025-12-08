@@ -6,6 +6,8 @@ pub mod registry;
 pub mod server;
 pub mod subscriber;
 
+pub use flashblocks_compression as compression;
+
 pub use auth::*;
 pub use client::*;
 pub use metrics::*;

@@ -17,6 +17,21 @@ struct FlashblocksRollupArgs {
 
     #[arg(long = "flashblocks.websocket-url", value_name = "WEBSOCKET_URL")]
     websocket_url: url::Url,
+
+    #[arg(
+        long = "flashblocks.dict-oracle",
+        env = "DICT_ORACLE",
+        value_name = "DICT_ORACLE"
+    )]
+    dict_oracle: Option<String>,
+
+    #[arg(
+        long = "flashblocks.dict-storage",
+        env = "DICT_STORAGE",
+        value_name = "DICT_STORAGE",
+        default_value = "/data/flashblocks-dicts"
+    )]
+    dict_storage: Option<std::path::PathBuf>,
 }
 
 fn main() {
@@ -30,8 +45,12 @@ fn main() {
                 .node(OpNode::new(rollup_args))
                 .extend_rpc_modules(move |ctx| {
                     if args.flashblocks_enabled {
-                        let mut flashblocks_overlay =
-                            FlashblocksOverlay::new(args.websocket_url, chain_spec);
+                        let mut flashblocks_overlay = FlashblocksOverlay::new(
+                            args.websocket_url,
+                            chain_spec,
+                            args.dict_oracle,
+                            args.dict_storage,
+                        );
                         flashblocks_overlay.start()?;
 
                         let eth_api = ctx.registry.eth_api().clone();

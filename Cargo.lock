@@ -3304,6 +3304,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "flashblocks-compression"
+version = "0.1.0"
+dependencies = [
+ "axum 0.8.7",
+ "brotli",
+ "eyre",
+ "reqwest",
+ "sha2",
+ "tokio",
+ "tracing",
+ "zstd-safe",
+]
+
+[[package]]
 name = "flashblocks-rpc"
 version = "0.1.0"
 dependencies = [
@@ -3321,6 +3335,7 @@ dependencies = [
  "brotli",
  "clap",
  "eyre",
+ "flashblocks-compression",
  "futures-util",
  "jsonrpsee",
  "metrics",
@@ -3363,10 +3378,10 @@ version = "0.1.0"
 dependencies = [
  "axum 0.8.7",
  "backoff",
- "brotli",
  "clap",
  "dotenvy",
  "eyre",
+ "flashblocks-compression",
  "futures",
  "hostname",
  "http",

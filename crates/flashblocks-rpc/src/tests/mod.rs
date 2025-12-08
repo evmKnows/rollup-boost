@@ -101,8 +101,12 @@ mod tests {
             .extend_rpc_modules(move |ctx| {
                 // We are not going to use the websocket connection to send payloads so we use
                 // a dummy url.
-                let flashblocks_overlay =
-                    FlashblocksOverlay::new(Url::parse("ws://localhost:8546")?, chain_spec);
+                let flashblocks_overlay = FlashblocksOverlay::new(
+                    Url::parse("ws://localhost:8546")?,
+                    chain_spec,
+                    None,
+                    None,
+                );
 
                 let eth_api = ctx.registry.eth_api().clone();
                 let api_ext = FlashblocksApiExt::new(eth_api.clone(), flashblocks_overlay.clone());

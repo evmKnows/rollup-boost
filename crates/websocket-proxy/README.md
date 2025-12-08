@@ -63,8 +63,21 @@ When Redis is enabled, the following features are available:
 
 If the Redis connection fails, the proxy will automatically fall back to in-memory rate limiting.
 
-### Brotli Compression
+### Compression
 
-The proxy supports compressing messages to downstream clients using Brotli.
+The proxy supports compressing messages to downstream clients using various algorithms.
 
-To enable this, pass the parameter `--enable-compression`
+#### Algorithms
+
+To enable compression, use the `--enable-compression` parameter with one of these values:
+- `br` - Brotli compression
+- `zstd` - Zstandard compression
+- `dcz` - Zstandard with dictionary support
+- `none` - No compression (default)
+
+#### Dictionary-based Compression
+
+When using `dcz` (dictionary compression), you can configure:
+
+- `--dict-oracle <URL>` - Dictionary oracle URL for fetching compression dictionaries
+- `--dict-storage <PATH>` - Directory for storing dictionaries (default: `/data/flashblocks-dicts`)
